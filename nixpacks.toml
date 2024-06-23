@@ -1,2 +1,5 @@
-[tools]
-pnpm = "9.x"
+[phases.setup]
+nixPkgs = [
+  'nodejs_20',  # Specify the version of Node.js
+  'pnpm-9_x'    # Use the latest version of pnpm 9
+]
