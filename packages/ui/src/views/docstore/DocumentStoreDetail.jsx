@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import * as PropTypes from 'prop-types'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 // material-ui
 import {
@@ -20,8 +20,7 @@ import {
     MenuItem,
     Divider,
     Button,
-    Skeleton,
-    IconButton
+    Skeleton
 } from '@mui/material'
 import { alpha, styled, useTheme } from '@mui/material/styles'
 import { tableCellClasses } from '@mui/material/TableCell'
@@ -35,6 +34,11 @@ import ErrorBoundary from '@/ErrorBoundary'
 import { StyledButton } from '@/ui-component/button/StyledButton'
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
 import DeleteDocStoreDialog from './DeleteDocStoreDialog'
+import { Available } from '@/ui-component/rbac/available'
+import { PermissionIconButton, StyledPermissionButton } from '@/ui-component/button/RBACButtons'
+import DocumentStoreStatus from '@/views/docstore/DocumentStoreStatus'
+import ConfirmDialog from '@/ui-component/dialog/ConfirmDialog'
+import DocStoreAPIDialog from './DocStoreAPIDialog'
 
 // API
 import documentsApi from '@/api/documentstore'
@@ -42,26 +46,25 @@ import documentsApi from '@/api/documentstore'
 // Hooks
 import useApi from '@/hooks/useApi'
 import useNotifier from '@/utils/useNotifier'
+import { useAuth } from '@/hooks/useAuth'
+import { getFileName } from '@/utils/genericHelper'
+import useConfirm from '@/hooks/useConfirm'
 
 // icons
-import {
-    IconPlus,
-    IconRefresh,
-    IconListDetails,
-    IconTrash,
-    IconX,
-    IconVectorBezier2,
-    IconRowInsertTop,
-    IconZoomScan
-} from '@tabler/icons-react'
+import { IconPlus, IconRefresh, IconX, IconVectorBezier2 } from '@tabler/icons-react'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import FileDeleteIcon from '@mui/icons-material/Delete'
 import FileEditIcon from '@mui/icons-material/Edit'
 import FileChunksIcon from '@mui/icons-material/AppRegistration'
+import NoteAddIcon from '@mui/icons-material/NoteAdd'
+import SearchIcon from '@mui/icons-material/Search'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import CodeIcon from '@mui/icons-material/Code'
 import doc_store_details_emptySVG from '@/assets/images/doc_store_details_empty.svg'
 
 // store
 import { closeSnackbar as closeSnackbarAction, enqueueSnackbar as enqueueSnackbarAction } from '@/store/actions'
+import { useError } from '@/store/context/ErrorContext'
 
 // ==============================|| DOCUMENTS ||============================== //
 
@@ -126,14 +129,17 @@ const DocumentStoreDetails = () => {
     const customization = useSelector((state) => state.customization)
     const navigate = useNavigate()
     const dispatch = useDispatch()
+    const { hasAssignedWorkspace } = useAuth()
     useNotifier()
+    const { confirm } = useConfirm()
 
     const enqueueSnackbar = (...args) => dispatch(enqueueSnackbarAction(...args))
     const closeSnackbar = (...args) => dispatch(closeSnackbarAction(...args))
+    const { error, setError } = useError()
+    const { hasPermission } = useAuth()
 
     const getSpecificDocumentStore = useApi(documentsApi.getSpecificDocumentStore)
 
-    const [error, setError] = useState(null)
     const [isLoading, setLoading] = useState(true)
     const [isBackdropLoading, setBackdropLoading] = useState(false)
     const [showDialog, setShowDialog] = useState(false)
@@ -143,9 +149,13 @@ const DocumentStoreDetails = () => {
     const [documentLoaderListDialogProps, setDocumentLoaderListDialogProps] = useState({})
     const [showDeleteDocStoreDialog, setShowDeleteDocStoreDialog] = useState(false)
     const [deleteDocStoreDialogProps, setDeleteDocStoreDialogProps] = useState({})
+    const [showDocStoreAPIDialog, setShowDocStoreAPIDialog] = useState(false)
+    const [docStoreAPIDialogProps, setDocStoreAPIDialogProps] = useState({})
 
-    const URLpath = document.location.pathname.toString().split('/')
-    const storeId = URLpath[URLpath.length - 1] === 'document-stores' ? '' : URLpath[URLpath.length - 1]
+    const [anchorEl, setAnchorEl] = useState(null)
+    const open = Boolean(anchorEl)
+
+    const { storeId } = useParams()
 
     const openPreviewSettings = (id) => {
         navigate('/document-stores/' + storeId + '/' + id)
@@ -176,19 +186,19 @@ const DocumentStoreDetails = () => {
         setShowDocumentLoaderListDialog(true)
     }
 
-    const deleteVectorStoreDataFromStore = async (storeId) => {
+    const deleteVectorStoreDataFromStore = async (storeId, docId) => {
         try {
-            await documentsApi.deleteVectorStoreDataFromStore(storeId)
+            await documentsApi.deleteVectorStoreDataFromStore(storeId, docId)
         } catch (error) {
             console.error(error)
         }
     }
 
-    const onDocStoreDelete = async (type, file, removeFromVectorStore) => {
+    const onDocStoreDelete = async (type, file) => {
         setBackdropLoading(true)
         setShowDeleteDocStoreDialog(false)
         if (type === 'STORE') {
-            if (removeFromVectorStore) {
+            if (documentStore.recordManagerConfig) {
                 await deleteVectorStoreDataFromStore(storeId)
             }
             try {
@@ -212,9 +222,10 @@ const DocumentStoreDetails = () => {
             } catch (error) {
                 setBackdropLoading(false)
                 setError(error)
-                const errorData = error.response.data || `${error.response.status}: ${error.response.statusText}`
                 enqueueSnackbar({
-                    message: `Failed to delete loader: ${errorData}`,
+                    message: `Failed to delete Document Store: ${
+                        typeof error.response.data === 'object' ? error.response.data.message : error.response.data
+                    }`,
                     options: {
                         key: new Date().getTime() + Math.random(),
                         variant: 'error',
@@ -228,6 +239,9 @@ const DocumentStoreDetails = () => {
                 })
             }
         } else if (type === 'LOADER') {
+            if (documentStore.recordManagerConfig) {
+                await deleteVectorStoreDataFromStore(storeId, file.id)
+            }
             try {
                 const deleteResp = await documentsApi.deleteLoaderFromStore(storeId, file.id)
                 setBackdropLoading(false)
@@ -249,9 +263,10 @@ const DocumentStoreDetails = () => {
             } catch (error) {
                 setError(error)
                 setBackdropLoading(false)
-                const errorData = error.response.data || `${error.response.status}: ${error.response.statusText}`
                 enqueueSnackbar({
-                    message: `Failed to delete loader: ${errorData}`,
+                    message: `Failed to delete Document Loader: ${
+                        typeof error.response.data === 'object' ? error.response.data.message : error.response.data
+                    }`,
                     options: {
                         key: new Date().getTime() + Math.random(),
                         variant: 'error',
@@ -268,9 +283,40 @@ const DocumentStoreDetails = () => {
     }
 
     const onLoaderDelete = (file, vectorStoreConfig, recordManagerConfig) => {
+        // Get the display name in the format "LoaderName (sourceName)"
+        const loaderName = file.loaderName || 'Unknown'
+        let sourceName = ''
+
+        // Prefer files.name when files array exists and has items
+        if (file.files && Array.isArray(file.files) && file.files.length > 0) {
+            sourceName = file.files.map((f) => f.name).join(', ')
+        } else if (file.source) {
+            // Fallback to source logic
+            if (typeof file.source === 'string' && file.source.includes('base64')) {
+                sourceName = getFileName(file.source)
+            } else if (typeof file.source === 'string' && file.source.startsWith('[') && file.source.endsWith(']')) {
+                sourceName = JSON.parse(file.source).join(', ')
+            } else if (typeof file.source === 'string') {
+                sourceName = file.source
+            }
+        }
+
+        const displayName = sourceName ? `${loaderName} (${sourceName})` : loaderName
+
+        let description = `Delete "${displayName}"? This will delete all the associated document chunks from the document store.`
+
+        if (
+            recordManagerConfig &&
+            vectorStoreConfig &&
+            Object.keys(recordManagerConfig).length > 0 &&
+            Object.keys(vectorStoreConfig).length > 0
+        ) {
+            description = `Delete "${displayName}"? This will delete all the associated document chunks from the document store and remove the actual data from the vector store database.`
+        }
+
         const props = {
             title: `Delete`,
-            description: `Delete Loader ${file.loaderName} ? This will delete all the associated document chunks.`,
+            description,
             vectorStoreConfig,
             recordManagerConfig,
             type: 'LOADER',
@@ -282,9 +328,20 @@ const DocumentStoreDetails = () => {
     }
 
     const onStoreDelete = (vectorStoreConfig, recordManagerConfig) => {
+        let description = `Delete Store ${getSpecificDocumentStore.data?.name}? This will delete all the associated loaders and document chunks from the document store.`
+
+        if (
+            recordManagerConfig &&
+            vectorStoreConfig &&
+            Object.keys(recordManagerConfig).length > 0 &&
+            Object.keys(vectorStoreConfig).length > 0
+        ) {
+            description = `Delete Store ${getSpecificDocumentStore.data?.name}? This will delete all the associated loaders and document chunks from the document store, and remove the actual data from the vector store database.`
+        }
+
         const props = {
             title: `Delete`,
-            description: `Delete Store ${getSpecificDocumentStore.data?.name} ? This will delete all the associated loaders and document chunks.`,
+            description,
             vectorStoreConfig,
             recordManagerConfig,
             type: 'STORE'
@@ -292,6 +349,55 @@ const DocumentStoreDetails = () => {
 
         setDeleteDocStoreDialogProps(props)
         setShowDeleteDocStoreDialog(true)
+    }
+
+    const onStoreRefresh = async (storeId) => {
+        const confirmPayload = {
+            title: `Refresh all loaders and upsert all chunks?`,
+            description: `This will re-process all loaders and upsert all chunks. This action might take some time.`,
+            confirmButtonName: 'Refresh',
+            cancelButtonName: 'Cancel'
+        }
+        const isConfirmed = await confirm(confirmPayload)
+
+        if (isConfirmed) {
+            setAnchorEl(null)
+            setBackdropLoading(true)
+            try {
+                const resp = await documentsApi.refreshLoader(storeId)
+                if (resp.data) {
+                    enqueueSnackbar({
+                        message: 'Document store refresh successfully!',
+                        options: {
+                            key: new Date().getTime() + Math.random(),
+                            variant: 'success',
+                            action: (key) => (
+                                <Button style={{ color: 'white' }} onClick={() => closeSnackbar(key)}>
+                                    <IconX />
+                                </Button>
+                            )
+                        }
+                    })
+                }
+                setBackdropLoading(false)
+            } catch (error) {
+                setBackdropLoading(false)
+                enqueueSnackbar({
+                    message: `Failed to refresh document store: ${
+                        typeof error.response.data === 'object' ? error.response.data.message : error.response.data
+                    }`,
+                    options: {
+                        key: new Date().getTime() + Math.random(),
+                        variant: 'error',
+                        action: (key) => (
+                            <Button style={{ color: 'white' }} onClick={() => closeSnackbar(key)}>
+                                <IconX />
+                            </Button>
+                        )
+                    }
+                })
+            }
+        }
     }
 
     const onEditClicked = () => {
@@ -316,6 +422,26 @@ const DocumentStoreDetails = () => {
         getSpecificDocumentStore.request(storeId)
     }
 
+    const handleClick = (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setAnchorEl(event.currentTarget)
+    }
+
+    const onViewUpsertAPI = (storeId, loaderId) => {
+        const props = {
+            title: `Upsert API`,
+            storeId,
+            loaderId
+        }
+        setDocStoreAPIDialogProps(props)
+        setShowDocStoreAPIDialog(true)
+    }
+
+    const handleClose = () => {
+        setAnchorEl(null)
+    }
+
     useEffect(() => {
         getSpecificDocumentStore.request(storeId)
 
@@ -324,19 +450,16 @@ const DocumentStoreDetails = () => {
 
     useEffect(() => {
         if (getSpecificDocumentStore.data) {
+            const workspaceId = getSpecificDocumentStore.data.workspaceId
+            if (!hasAssignedWorkspace(workspaceId)) {
+                navigate('/unauthorized')
+                return
+            }
             setDocumentStore(getSpecificDocumentStore.data)
-            // total the chunks and chars
         }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [getSpecificDocumentStore.data])
-
-    useEffect(() => {
-        if (getSpecificDocumentStore.error) {
-            setError(getSpecificDocumentStore.error)
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [getSpecificDocumentStore.error])
 
     useEffect(() => {
         setLoading(getSpecificDocumentStore.loading)
@@ -351,92 +474,116 @@ const DocumentStoreDetails = () => {
                     <Stack flexDirection='column' sx={{ gap: 3 }}>
                         <ViewHeader
                             isBackButton={true}
-                            isEditButton={true}
+                            isEditButton={hasPermission('documentStores:create,documentStores:update')}
                             search={false}
                             title={documentStore?.name}
                             description={documentStore?.description}
                             onBack={() => navigate('/document-stores')}
                             onEdit={() => onEditClicked()}
                         >
-                            <IconButton
-                                onClick={() => onStoreDelete(documentStore.vectorStoreConfig, documentStore.recordManagerConfig)}
-                                size='small'
-                                color='error'
-                                title='Delete Document Store'
-                                sx={{ mr: 2 }}
-                            >
-                                <IconTrash />
-                            </IconButton>
-                            <StyledButton
+                            {(documentStore?.status === 'STALE' || documentStore?.status === 'UPSERTING') && (
+                                <PermissionIconButton
+                                    permissionId={'documentStores:view'}
+                                    onClick={onConfirm}
+                                    size='small'
+                                    color='primary'
+                                    title='Refresh Document Store'
+                                >
+                                    <IconRefresh />
+                                </PermissionIconButton>
+                            )}
+                            <StyledPermissionButton
+                                permissionId={'documentStores:add-loader'}
                                 variant='contained'
-                                sx={{ borderRadius: 2, height: '100%', color: 'white' }}
+                                sx={{ ml: 2, minWidth: 200, borderRadius: 2, height: '100%', color: 'white' }}
                                 startIcon={<IconPlus />}
                                 onClick={listLoaders}
                             >
                                 Add Document Loader
-                            </StyledButton>
-                            {(documentStore?.status === 'STALE' || documentStore?.status === 'UPSERTING') && (
-                                <Button variant='outlined' sx={{ mr: 2 }} startIcon={<IconRefresh />} onClick={onConfirm}>
-                                    Refresh
-                                </Button>
-                            )}
-                            {documentStore?.status === 'UPSERTING' && (
-                                <Chip
-                                    variant='raised'
-                                    label='Upserting to Vector Store'
-                                    color='warning'
-                                    sx={{ borderRadius: 2, height: '100%' }}
-                                />
-                            )}
-                            {documentStore?.totalChunks > 0 && documentStore?.status !== 'UPSERTING' && (
-                                <>
-                                    <Button
-                                        variant='contained'
-                                        sx={{
-                                            borderRadius: 2,
-                                            height: '100%'
-                                        }}
-                                        color='secondary'
-                                        startIcon={<IconListDetails />}
-                                        onClick={() => showStoredChunks('all')}
-                                    >
-                                        View Chunks
-                                    </Button>
-                                    <Button
-                                        variant='contained'
-                                        sx={{
-                                            borderRadius: 2,
-                                            height: '100%',
-                                            backgroundImage: `linear-gradient(to right, #13547a, #2f9e91)`,
-                                            '&:hover': {
-                                                backgroundImage: `linear-gradient(to right, #0b3d5b, #1a8377)`
-                                            }
-                                        }}
-                                        startIcon={<IconRowInsertTop />}
-                                        onClick={() => showVectorStore(documentStore.id)}
-                                    >
-                                        Upsert Config
-                                    </Button>
-                                </>
-                            )}
-                            {documentStore?.totalChunks > 0 && documentStore?.status === 'UPSERTED' && (
-                                <Button
-                                    variant='contained'
-                                    sx={{
-                                        borderRadius: 2,
-                                        height: '100%',
-                                        backgroundImage: `linear-gradient(to right, #3f5efb, #fc466b)`,
-                                        '&:hover': {
-                                            backgroundImage: `linear-gradient(to right, #2b4efb, #fe2752)`
-                                        }
+                            </StyledPermissionButton>
+                            <Button
+                                id='document-store-header-action-button'
+                                aria-controls={open ? 'document-store-header-menu' : undefined}
+                                aria-haspopup='true'
+                                aria-expanded={open ? 'true' : undefined}
+                                variant='outlined'
+                                disableElevation
+                                color='secondary'
+                                onClick={handleClick}
+                                sx={{ minWidth: 150 }}
+                                endIcon={<KeyboardArrowDownIcon />}
+                            >
+                                More Actions
+                            </Button>
+                            <StyledMenu
+                                id='document-store-header-menu'
+                                MenuListProps={{
+                                    'aria-labelledby': 'document-store-header-menu-button'
+                                }}
+                                anchorEl={anchorEl}
+                                open={open}
+                                onClose={handleClose}
+                            >
+                                <MenuItem
+                                    disabled={documentStore?.totalChunks <= 0 || documentStore?.status === 'UPSERTING'}
+                                    onClick={() => {
+                                        handleClose()
+                                        showStoredChunks('all')
                                     }}
-                                    startIcon={<IconZoomScan />}
-                                    onClick={() => showVectorStoreQuery(documentStore.id)}
+                                    disableRipple
                                 >
+                                    <FileChunksIcon />
+                                    View & Edit Chunks
+                                </MenuItem>
+                                <Available permission={'documentStores:upsert-config'}>
+                                    <MenuItem
+                                        disabled={documentStore?.totalChunks <= 0 || documentStore?.status === 'UPSERTING'}
+                                        onClick={() => {
+                                            handleClose()
+                                            showVectorStore(documentStore.id)
+                                        }}
+                                        disableRipple
+                                    >
+                                        <NoteAddIcon />
+                                        Upsert All Chunks
+                                    </MenuItem>
+                                </Available>
+                                <MenuItem
+                                    disabled={documentStore?.totalChunks <= 0 || documentStore?.status !== 'UPSERTED'}
+                                    onClick={() => {
+                                        handleClose()
+                                        showVectorStoreQuery(documentStore.id)
+                                    }}
+                                    disableRipple
+                                >
+                                    <SearchIcon />
                                     Retrieval Query
-                                </Button>
-                            )}
+                                </MenuItem>
+                                <Available permission={'documentStores:upsert-config'}>
+                                    <MenuItem
+                                        disabled={documentStore?.totalChunks <= 0 || documentStore?.status !== 'UPSERTED'}
+                                        onClick={() => onStoreRefresh(documentStore.id)}
+                                        disableRipple
+                                        title='Re-process all loaders and upsert all chunks'
+                                    >
+                                        <RefreshIcon />
+                                        Refresh
+                                    </MenuItem>
+                                </Available>
+                                <Divider sx={{ my: 0.5 }} />
+                                <MenuItem
+                                    onClick={() => {
+                                        handleClose()
+                                        onStoreDelete(documentStore.vectorStoreConfig, documentStore.recordManagerConfig)
+                                    }}
+                                    disableRipple
+                                >
+                                    <FileDeleteIcon />
+                                    Delete
+                                </MenuItem>
+                            </StyledMenu>
                         </ViewHeader>
+                        <DocumentStoreStatus status={documentStore?.status} />
                         {getSpecificDocumentStore.data?.whereUsed?.length > 0 && (
                             <Stack flexDirection='row' sx={{ gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
                                 <div
@@ -512,7 +659,9 @@ const DocumentStoreDetails = () => {
                                             <StyledTableCell>Source(s)</StyledTableCell>
                                             <StyledTableCell>Chunks</StyledTableCell>
                                             <StyledTableCell>Chars</StyledTableCell>
-                                            <StyledTableCell>Actions</StyledTableCell>
+                                            <Available permission={'documentStores:preview-process,documentStores:delete-loader'}>
+                                                <StyledTableCell>Actions</StyledTableCell>
+                                            </Available>
                                         </TableRow>
                                     </TableHead>
                                     <TableBody>
@@ -537,9 +686,11 @@ const DocumentStoreDetails = () => {
                                                     <StyledTableCell>
                                                         <Skeleton variant='text' />
                                                     </StyledTableCell>
-                                                    <StyledTableCell>
-                                                        <Skeleton variant='text' />
-                                                    </StyledTableCell>
+                                                    <Available permission={'documentStores:preview-process,documentStores:delete-loader'}>
+                                                        <StyledTableCell>
+                                                            <Skeleton variant='text' />
+                                                        </StyledTableCell>
+                                                    </Available>
                                                 </StyledTableRow>
                                                 <StyledTableRow>
                                                     <StyledTableCell>
@@ -560,9 +711,11 @@ const DocumentStoreDetails = () => {
                                                     <StyledTableCell>
                                                         <Skeleton variant='text' />
                                                     </StyledTableCell>
-                                                    <StyledTableCell>
-                                                        <Skeleton variant='text' />
-                                                    </StyledTableCell>
+                                                    <Available permission={'documentStores:preview-process,documentStores:delete-loader'}>
+                                                        <StyledTableCell>
+                                                            <Skeleton variant='text' />
+                                                        </StyledTableCell>
+                                                    </Available>
                                                 </StyledTableRow>
                                             </>
                                         ) : (
@@ -584,6 +737,10 @@ const DocumentStoreDetails = () => {
                                                                     documentStore?.recordManagerConfig
                                                                 )
                                                             }
+                                                            onChunkUpsert={() =>
+                                                                navigate(`/document-stores/vector/${documentStore.id}/${loader.id}`)
+                                                            }
+                                                            onViewUpsertAPI={() => onViewUpsertAPI(documentStore.id, loader.id)}
                                                         />
                                                     ))}
                                             </>
@@ -629,7 +786,15 @@ const DocumentStoreDetails = () => {
                     onDelete={onDocStoreDelete}
                 />
             )}
+            {showDocStoreAPIDialog && (
+                <DocStoreAPIDialog
+                    show={showDocStoreAPIDialog}
+                    dialogProps={docStoreAPIDialogProps}
+                    onCancel={() => setShowDocStoreAPIDialog(false)}
+                />
+            )}
             {isBackdropLoading && <BackdropLoader open={isBackdropLoading} />}
+            <ConfirmDialog />
         </>
     )
 }
@@ -648,11 +813,26 @@ function LoaderRow(props) {
         setAnchorEl(null)
     }
 
-    const formatSources = (source) => {
-        if (source && typeof source === 'string' && source.startsWith('[') && source.endsWith(']')) {
-            return JSON.parse(source).join(', ')
+    const formatSources = (files, source, loaderName) => {
+        let sourceName = ''
+
+        // Prefer files.name when files array exists and has items
+        if (files && Array.isArray(files) && files.length > 0) {
+            sourceName = files.map((file) => file.name).join(', ')
+        } else if (source && typeof source === 'string' && source.includes('base64')) {
+            // Fallback to original source logic
+            sourceName = getFileName(source)
+        } else if (source && typeof source === 'string' && source.startsWith('[') && source.endsWith(']')) {
+            sourceName = JSON.parse(source).join(', ')
+        } else if (source) {
+            sourceName = source
         }
-        return source
+
+        // Return format: "LoaderName (sourceName)" or just "LoaderName" if no source
+        if (!sourceName) {
+            return loaderName || 'No source'
+        }
+        return loaderName ? `${loaderName} (${sourceName})` : sourceName
     }
 
     return (
@@ -673,51 +853,103 @@ function LoaderRow(props) {
                     {props.loader.loaderName}
                 </StyledTableCell>
                 <StyledTableCell onClick={props.onViewChunksClick}>{props.loader.splitterName ?? 'None'}</StyledTableCell>
-                <StyledTableCell onClick={props.onViewChunksClick}>{formatSources(props.loader.source)}</StyledTableCell>
+                <StyledTableCell onClick={props.onViewChunksClick}>
+                    {formatSources(props.loader.files, props.loader.source)}
+                </StyledTableCell>
                 <StyledTableCell onClick={props.onViewChunksClick}>
                     {props.loader.totalChunks && <Chip variant='outlined' size='small' label={props.loader.totalChunks.toLocaleString()} />}
                 </StyledTableCell>
                 <StyledTableCell onClick={props.onViewChunksClick}>
                     {props.loader.totalChars && <Chip variant='outlined' size='small' label={props.loader.totalChars.toLocaleString()} />}
                 </StyledTableCell>
-                <StyledTableCell>
-                    <div>
-                        <Button
-                            id='document-store-action-button'
-                            aria-controls={open ? 'document-store-action-customized-menu' : undefined}
-                            aria-haspopup='true'
-                            aria-expanded={open ? 'true' : undefined}
-                            disableElevation
-                            onClick={(e) => handleClick(e)}
-                            endIcon={<KeyboardArrowDownIcon />}
-                        >
-                            Options
-                        </Button>
-                        <StyledMenu
-                            id='document-store-actions-customized-menu'
-                            MenuListProps={{
-                                'aria-labelledby': 'document-store-actions-customized-button'
-                            }}
-                            anchorEl={anchorEl}
-                            open={open}
-                            onClose={handleClose}
-                        >
-                            <MenuItem onClick={props.onEditClick} disableRipple>
-                                <FileEditIcon />
-                                Preview & Process
-                            </MenuItem>
-                            <MenuItem onClick={props.onViewChunksClick} disableRipple>
-                                <FileChunksIcon />
-                                View & Edit Chunks
-                            </MenuItem>
-                            <Divider sx={{ my: 0.5 }} />
-                            <MenuItem onClick={props.onDeleteClick} disableRipple>
-                                <FileDeleteIcon />
-                                Delete
-                            </MenuItem>
-                        </StyledMenu>
-                    </div>
-                </StyledTableCell>
+                <Available permission={'documentStores:preview-process,documentStores:delete-loader'}>
+                    <StyledTableCell>
+                        <div>
+                            <Button
+                                id='document-store-action-button'
+                                aria-controls={open ? 'document-store-action-customized-menu' : undefined}
+                                aria-haspopup='true'
+                                aria-expanded={open ? 'true' : undefined}
+                                disableElevation
+                                onClick={(e) => handleClick(e)}
+                                endIcon={<KeyboardArrowDownIcon />}
+                            >
+                                Options
+                            </Button>
+                            <StyledMenu
+                                id='document-store-actions-customized-menu'
+                                MenuListProps={{
+                                    'aria-labelledby': 'document-store-actions-customized-button'
+                                }}
+                                anchorEl={anchorEl}
+                                open={open}
+                                onClose={handleClose}
+                            >
+                                <Available permission={'documentStores:preview-process'}>
+                                    <MenuItem
+                                        onClick={() => {
+                                            handleClose()
+                                            props.onEditClick()
+                                        }}
+                                        disableRipple
+                                    >
+                                        <FileEditIcon />
+                                        Preview & Process
+                                    </MenuItem>
+                                </Available>
+                                <Available permission={'documentStores:preview-process'}>
+                                    <MenuItem
+                                        onClick={() => {
+                                            handleClose()
+                                            props.onViewChunksClick()
+                                        }}
+                                        disableRipple
+                                    >
+                                        <FileChunksIcon />
+                                        View & Edit Chunks
+                                    </MenuItem>
+                                </Available>
+                                <Available permission={'documentStores:preview-process'}>
+                                    <MenuItem
+                                        onClick={() => {
+                                            handleClose()
+                                            props.onChunkUpsert()
+                                        }}
+                                        disableRipple
+                                    >
+                                        <NoteAddIcon />
+                                        Upsert Chunks
+                                    </MenuItem>
+                                </Available>
+                                <Available permission={'documentStores:preview-process'}>
+                                    <MenuItem
+                                        onClick={() => {
+                                            handleClose()
+                                            props.onViewUpsertAPI()
+                                        }}
+                                        disableRipple
+                                    >
+                                        <CodeIcon />
+                                        View API
+                                    </MenuItem>
+                                </Available>
+                                <Divider sx={{ my: 0.5 }} />
+                                <Available permission={'documentStores:delete-loader'}>
+                                    <MenuItem
+                                        onClick={() => {
+                                            handleClose()
+                                            props.onDeleteClick()
+                                        }}
+                                        disableRipple
+                                    >
+                                        <FileDeleteIcon />
+                                        Delete
+                                    </MenuItem>
+                                </Available>
+                            </StyledMenu>
+                        </div>
+                    </StyledTableCell>
+                </Available>
             </TableRow>
         </>
     )
@@ -730,6 +962,8 @@ LoaderRow.propTypes = {
     theme: PropTypes.any,
     onViewChunksClick: PropTypes.func,
     onEditClick: PropTypes.func,
-    onDeleteClick: PropTypes.func
+    onDeleteClick: PropTypes.func,
+    onChunkUpsert: PropTypes.func,
+    onViewUpsertAPI: PropTypes.func
 }
 export default DocumentStoreDetails

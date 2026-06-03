@@ -1,33 +1,42 @@
 import { StatusCodes } from 'http-status-codes'
+import { QueryRunner } from 'typeorm'
+import { validate } from 'uuid'
 import { Tool } from '../../database/entities/Tool'
 import { InternalFlowiseError } from '../../errors/internalFlowiseError'
 import { getErrorMessage } from '../../errors/utils'
+import { FLOWISE_COUNTER_STATUS, FLOWISE_METRIC_COUNTERS } from '../../Interface.Metrics'
 import { getAppVersion } from '../../utils'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 
-const createTool = async (requestBody: any): Promise<any> => {
+const createTool = async (requestBody: any, orgId: string): Promise<any> => {
     try {
         const appServer = getRunningExpressApp()
         const newTool = new Tool()
         Object.assign(newTool, requestBody)
         const tool = await appServer.AppDataSource.getRepository(Tool).create(newTool)
         const dbResponse = await appServer.AppDataSource.getRepository(Tool).save(tool)
-        await appServer.telemetry.sendTelemetry('tool_created', {
-            version: await getAppVersion(),
-            toolId: dbResponse.id,
-            toolName: dbResponse.name
-        })
+        await appServer.telemetry.sendTelemetry(
+            'tool_created',
+            {
+                version: await getAppVersion(),
+                toolId: dbResponse.id,
+                toolName: dbResponse.name
+            },
+            orgId
+        )
+        appServer.metricsProvider?.incrementCounter(FLOWISE_METRIC_COUNTERS.TOOL_CREATED, { status: FLOWISE_COUNTER_STATUS.SUCCESS })
         return dbResponse
     } catch (error) {
         throw new InternalFlowiseError(StatusCodes.INTERNAL_SERVER_ERROR, `Error: toolsService.createTool - ${getErrorMessage(error)}`)
     }
 }
 
-const deleteTool = async (toolId: string): Promise<any> => {
+const deleteTool = async (toolId: string, workspaceId: string): Promise<any> => {
     try {
         const appServer = getRunningExpressApp()
         const dbResponse = await appServer.AppDataSource.getRepository(Tool).delete({
-            id: toolId
+            id: toolId,
+            workspaceId: workspaceId
         })
         return dbResponse
     } catch (error) {
@@ -35,21 +44,34 @@ const deleteTool = async (toolId: string): Promise<any> => {
     }
 }
 
-const getAllTools = async (): Promise<Tool[]> => {
+const getAllTools = async (workspaceId?: string, page: number = -1, limit: number = -1) => {
     try {
         const appServer = getRunningExpressApp()
-        const dbResponse = await appServer.AppDataSource.getRepository(Tool).find()
-        return dbResponse
+        const queryBuilder = appServer.AppDataSource.getRepository(Tool).createQueryBuilder('tool').orderBy('tool.updatedDate', 'DESC')
+
+        if (page > 0 && limit > 0) {
+            queryBuilder.skip((page - 1) * limit)
+            queryBuilder.take(limit)
+        }
+        if (workspaceId) queryBuilder.andWhere('tool.workspaceId = :workspaceId', { workspaceId })
+        const [data, total] = await queryBuilder.getManyAndCount()
+
+        if (page > 0 && limit > 0) {
+            return { data, total }
+        } else {
+            return data
+        }
     } catch (error) {
         throw new InternalFlowiseError(StatusCodes.INTERNAL_SERVER_ERROR, `Error: toolsService.getAllTools - ${getErrorMessage(error)}`)
     }
 }
 
-const getToolById = async (toolId: string): Promise<any> => {
+const getToolById = async (toolId: string, workspaceId: string): Promise<any> => {
     try {
         const appServer = getRunningExpressApp()
         const dbResponse = await appServer.AppDataSource.getRepository(Tool).findOneBy({
-            id: toolId
+            id: toolId,
+            workspaceId: workspaceId
         })
         if (!dbResponse) {
             throw new InternalFlowiseError(StatusCodes.NOT_FOUND, `Tool ${toolId} not found`)
@@ -60,18 +82,20 @@ const getToolById = async (toolId: string): Promise<any> => {
     }
 }
 
-const updateTool = async (toolId: string, toolBody: any): Promise<any> => {
+const updateTool = async (toolId: string, toolBody: any, workspaceId: string): Promise<any> => {
     try {
         const appServer = getRunningExpressApp()
         const tool = await appServer.AppDataSource.getRepository(Tool).findOneBy({
-            id: toolId
+            id: toolId,
+            workspaceId: workspaceId
         })
         if (!tool) {
             throw new InternalFlowiseError(StatusCodes.NOT_FOUND, `Tool ${toolId} not found`)
         }
         const updateTool = new Tool()
         Object.assign(updateTool, toolBody)
-        await appServer.AppDataSource.getRepository(Tool).merge(tool, updateTool)
+        appServer.AppDataSource.getRepository(Tool).merge(tool, updateTool)
+        tool.workspaceId = workspaceId // defense-in-depth: never trust client-supplied workspaceId
         const dbResponse = await appServer.AppDataSource.getRepository(Tool).save(tool)
         return dbResponse
     } catch (error) {
@@ -79,9 +103,16 @@ const updateTool = async (toolId: string, toolBody: any): Promise<any> => {
     }
 }
 
-const importTools = async (newTools: Partial<Tool>[]) => {
+const importTools = async (newTools: Partial<Tool>[], queryRunner?: QueryRunner) => {
     try {
+        for (const data of newTools) {
+            if (data.id && !validate(data.id)) {
+                throw new InternalFlowiseError(StatusCodes.PRECONDITION_FAILED, `Error: importTools - invalid id!`)
+            }
+        }
+
         const appServer = getRunningExpressApp()
+        const repository = queryRunner ? queryRunner.manager.getRepository(Tool) : appServer.AppDataSource.getRepository(Tool)
 
         // step 1 - check whether file tools array is zero
         if (newTools.length == 0) return
@@ -97,11 +128,7 @@ const importTools = async (newTools: Partial<Tool>[]) => {
             count += 1
         })
 
-        const selectResponse = await appServer.AppDataSource.getRepository(Tool)
-            .createQueryBuilder('t')
-            .select('t.id')
-            .where(`t.id IN ${ids}`)
-            .getMany()
+        const selectResponse = await repository.createQueryBuilder('t').select('t.id').where(`t.id IN ${ids}`).getMany()
         const foundIds = selectResponse.map((response) => {
             return response.id
         })
@@ -118,7 +145,7 @@ const importTools = async (newTools: Partial<Tool>[]) => {
         })
 
         // step 4 - transactional insert array of entities
-        const insertResponse = await appServer.AppDataSource.getRepository(Tool).insert(prepTools)
+        const insertResponse = await repository.insert(prepTools)
 
         return insertResponse
     } catch (error) {

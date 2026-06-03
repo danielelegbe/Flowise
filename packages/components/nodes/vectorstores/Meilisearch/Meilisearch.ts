@@ -18,7 +18,6 @@ class MeilisearchRetriever_node implements INode {
     baseClasses: string[]
     inputs: INodeParams[]
     credential: INodeParams
-    badge: string
     outputs: INodeOutputsValue[]
     author?: string
 
@@ -29,7 +28,6 @@ class MeilisearchRetriever_node implements INode {
         this.type = 'Meilisearch'
         this.icon = 'Meilisearch.png'
         this.category = 'Vector Stores'
-        this.badge = 'NEW'
         this.description = `Upsert embedded data and perform similarity search upon query using Meilisearch hybrid search functionality`
         this.baseClasses = ['BaseRetriever']
         this.credential = {
@@ -81,7 +79,7 @@ class MeilisearchRetriever_node implements INode {
                 label: 'Semantic Ratio',
                 name: 'semanticRatio',
                 type: 'number',
-                description: 'percentage of sematic reasoning in meilisearch hybrid search, default is 0.75',
+                description: 'percentage of semantic reasoning in meilisearch hybrid search, default is 0.75',
                 additionalParams: true,
                 optional: true
             },
@@ -91,7 +89,8 @@ class MeilisearchRetriever_node implements INode {
                 type: 'string',
                 description: 'search filter to apply on searchable attributes',
                 additionalParams: true,
-                optional: true
+                optional: true,
+                acceptVariable: true
             }
         ]
         this.outputs = [
@@ -163,7 +162,7 @@ class MeilisearchRetriever_node implements INode {
                     }
                 } catch (error) {
                     console.error(error)
-                    console.warn('Error occured when deleting your index, if it did not exist, we will create one for you... ')
+                    console.warn('Error occurred when deleting your index, if it did not exist, we will create one for you... ')
                 }
             }
 
